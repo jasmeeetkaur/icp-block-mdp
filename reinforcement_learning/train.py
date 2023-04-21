@@ -66,6 +66,7 @@ class Workspace(object):
         self.step = [0] * cfg.num_train_envs
 
     def evaluate(self, env, train=False):
+        episode_reward_a = []
         for episode in range(self.cfg.num_eval_episodes):
             obs = env.reset()
             self.agent.reset()
@@ -88,6 +89,11 @@ class Workspace(object):
                 self.logger.log(
                     "eval/eval_episode_reward", episode_reward, self.step[0]
                 )
+            episode_reward_a.append(episode_reward)
+        if(train):
+            print("Train :", np.mean(episode_reward_a), np.std(episode_reward_a))
+        else :
+            print("Test:", np.mean(episode_reward_a), np.std(episode_reward_a))
 
     def run(self):
         episode, episode_reward, episode_step, done = (
@@ -109,10 +115,10 @@ class Workspace(object):
                             "train/duration", time.time() - start_time, self.step[e_idx]
                         )
                         start_time = time.time()
-                        self.logger.dump(
-                            self.step[e_idx],
-                            save=(self.step[e_idx] > self.cfg.num_seed_steps),
-                        )
+                        # self.logger.dump(
+                        #     self.step[e_idx],
+                        #     save=(self.step[e_idx] > self.cfg.num_seed_steps),
+                        # )
 
                     # evaluate agent periodically
                     if self.step[0] > 0 and self.step[0] % self.cfg.eval_frequency == 0:
@@ -121,7 +127,7 @@ class Workspace(object):
                         )
                         self.evaluate(env, train=True)
                         self.evaluate(self.test_envs[0], train=False)
-                        self.logger.dump(self.step[e_idx])
+                       #  self.logger.dump(self.step[e_idx])
                     self.logger.log(
                         "train/episode_reward", episode_reward[e_idx], self.step[e_idx]
                     )
@@ -133,6 +139,7 @@ class Workspace(object):
                     episode_step[e_idx] = 0
                     episode[e_idx] += 1
 
+                    print("train/episode", episode[e_idx], self.step[e_idx])
                     self.logger.log("train/episode", episode[e_idx], self.step[e_idx])
 
                 # sample action for data collection
@@ -145,6 +152,10 @@ class Workspace(object):
                 # run training update
                 if self.step[e_idx] >= self.cfg.num_seed_steps:
                     self.agent.update(self.replay_buffer, self.logger, self.step[e_idx])
+                    if self.step[e_idx] % self.cfg.eval_frequency == 0: 
+                        print(e_idx,self.step[e_idx])
+                        self.evaluate(env, train=True)
+                        self.evaluate(self.test_envs[0], train=False)
 
                 try:
                     next_obs[e_idx], reward, done[e_idx], _ = env.step(action)

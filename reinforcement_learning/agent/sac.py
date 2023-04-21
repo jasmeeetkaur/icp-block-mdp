@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import autograd, optim
+from torch.autograd import Variable
 
 import hydra
 import utils
@@ -27,9 +28,15 @@ def make_dynamics_model(feature_dim, hidden_dim, action_shape):
 
 
 def irm_penalty(logits, labels):
-    scale = torch.tensor(1.0).cuda().requires_grad_()
+    scale = torch.tensor(1.0).requires_grad_()
     loss = F.mse_loss(logits * scale, labels)
     grad = autograd.grad(loss, [scale], create_graph=True)[0]
+    return torch.sum(grad ** 2)
+
+def mri_penalty(logits, labels):
+    scale = torch.tensor(1.0).requires_grad_()
+    labels = (labels.abs().pow(2).mean())*scale
+    grad = autograd.grad(labels, [scale], create_graph=True)[0]
     return torch.sum(grad ** 2)
 
 
@@ -331,7 +338,7 @@ class CausalAgent(Agent):
             list(self.decoder.parameters())
             + list(self.model.parameters())
             + list(self.reward_model.parameters())
-            + task_specific_parameters
+            #+ task_specific_parameters
             + list(self.encoder.parameters()),
             lr=decoder_lr,
             weight_decay=decoder_weight_lambda,
@@ -372,6 +379,7 @@ class CausalAgent(Agent):
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(
             current_Q2, target_Q
         )
+        
         logger.log("train_critic/loss", critic_loss, step)
 
         return critic_loss
@@ -526,8 +534,6 @@ class CausalAgent(Agent):
 
         if step % self.critic_target_update_frequency == 0:
             utils.soft_update_params(self.critic, self.critic_target, self.critic_tau)
-
-
 class IRMAgent(Agent):
     """IRM algorithm."""
 
@@ -643,7 +649,11 @@ class IRMAgent(Agent):
             current_Q2, target_Q
         )
 
-        self.irm_penalty = irm_penalty(current_Q1, target_Q) + irm_penalty(
+        # self.irm_penalty = irm_penalty(current_Q1, target_Q) + irm_penalty(
+        #     current_Q2, target_Q
+        # )
+
+        self.irm_penalty = mri_penalty(current_Q1, target_Q) + mri_penalty(
             current_Q2, target_Q
         )
         logger.log("train_critic/loss", critic_loss, step)
@@ -709,9 +719,14 @@ class IRMAgent(Agent):
                 total_alpha_loss.append(alpha_loss)
 
             irm_penalties.append(self.irm_penalty)
+        l1 = irm_penalties[0]
+        l2 = irm_penalties[1]
+        train_penalty = (l1-l2).abs()*(0.7)
+        print(train_penalty)
+
 
         # Optimize the critic
-        train_penalty = torch.stack(irm_penalties).mean()
+        #train_penalty = torch.stack(irm_penalties).mean()
         penalty_weight = (
             self.penalty_weight if step >= self.penalty_anneal_iters else 1.0
         )
