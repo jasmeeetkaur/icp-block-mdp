@@ -30,7 +30,6 @@ MRI = True
 def get_ortho_diff(n_env):
     ones = torch.ones(n_env,1) 
     a,_ = torch.linalg.qr(ones, mode='complete')
-    # U_mean = a[0:1]  # ones.T /math.sqrt(n_env)
     U_diff = a[1:]
     return U_diff  
 
@@ -46,12 +45,12 @@ def mri_penalty(logits, labels):
     grad = autograd.grad(labels, [scale], create_graph=True)[0]
     return torch.sum(grad ** 2)
 
-def irm_constrain(logits, labels):
+def irm_constraint(logits, labels):
     oo = (logits * logits).mean()
     oy = (logits * labels).mean()
     return (oo-oy)
 
-def mri_constrain(logits, labels):
+def mri_constraint(logits, labels):
     oo = (logits * logits).mean()
     oy = (logits * labels).mean()
     return (oy)
@@ -83,7 +82,6 @@ class SACAgent(Agent):
         batch_size,
     ):
         super().__init__()
-        print("SAC")
         self.action_range = action_range
         self.device = torch.device(device)
         self.discount = discount
@@ -125,6 +123,7 @@ class SACAgent(Agent):
 
         self.train()
         self.critic_target.train()
+        print("SAC")
 
     def train(self, training=True):
         self.training = training
@@ -169,7 +168,7 @@ class SACAgent(Agent):
 
         # Optimize the critic
         self.critic_optimizer.zero_grad()
-        (critic_loss + 1e-5 * L1_reg).backward()
+        (critic_loss + 1e-5 * L1_reg).backward(retain_graph=True)
         self.critic_optimizer.step()
 
         self.critic.log(logger, step)
@@ -205,12 +204,12 @@ class SACAgent(Agent):
         self.actor_optimizer.zero_grad()
         self.log_alpha_optimizer.zero_grad()
 
-        actor_loss.backward()
+        actor_loss.backward(retain_graph=True)
 
         alpha_loss = (self.alpha * (-log_prob - self.target_entropy).detach()).mean()
         logger.log("train_alpha/loss", alpha_loss, step)
         logger.log("train_alpha/value", self.alpha, step)
-        alpha_loss.backward()
+        alpha_loss.backward(retain_graph=True)
 
         self.actor_optimizer.step()
         self.log_alpha_optimizer.step()
@@ -271,7 +270,6 @@ class CausalAgent(Agent):
         batch_size,
     ):
         super().__init__()
-        print("Causal")
         self.action_range = action_range
         self.device = torch.device(device)
         self.discount = discount
@@ -381,6 +379,7 @@ class CausalAgent(Agent):
 
         self.train()
         self.critic_target.train()
+        print("Causal")
 
     def train(self, training=True):
         self.training = training
@@ -494,7 +493,7 @@ class CausalAgent(Agent):
             + self.decoder_latent_lambda * L1_reg
             - c_ent * entropy
             + self.kld * KLD
-        ).backward()
+        ).backward(retain_graph=True)
 
         self.encoder_optimizer.step()
         self.decoder_optimizer.step()
@@ -507,7 +506,7 @@ class CausalAgent(Agent):
         classifier_loss = F.cross_entropy(pred_labels, env_id)
 
         self.classifier_optimizer.zero_grad()
-        classifier_loss.backward()
+        classifier_loss.backward(retain_graph=True)
         self.classifier_optimizer.step()
 
     def update(self, replay_buffer, logger, step):
@@ -573,10 +572,10 @@ class CausalAgent(Agent):
             self.actor_optimizer.zero_grad()
             self.log_alpha_optimizer.zero_grad()
 
-        torch.stack(total_critic_loss).mean().backward()
+        torch.stack(total_critic_loss).mean().backward(retain_graph=True)
         if step % self.actor_update_frequency == 0:
-            torch.stack(total_actor_loss).mean().backward()
-            torch.stack(total_alpha_loss).mean().backward()
+            torch.stack(total_actor_loss).mean().backward(retain_graph=True)
+            torch.stack(total_alpha_loss).mean().backward(retain_graph=True)
 
         self.critic_optimizer.step()
         if step % self.actor_update_frequency == 0:
@@ -671,6 +670,10 @@ class IRMAgent(Agent):
 
         self.train()
         self.critic_target.train()
+        if MRI:
+            print("MRI")
+        else:
+            print("IRM")
 
     def train(self, training=True):
         self.training = training
@@ -709,9 +712,15 @@ class IRMAgent(Agent):
         #     current_Q2, target_Q
         # )
 
-        self.irm_penalty = mri_penalty(current_Q1, target_Q) + mri_penalty(
-            current_Q2, target_Q
-        )
+        # self.irm_penalty = mri_penalty(current_Q1, target_Q) + mri_penalty(
+        #     current_Q2, target_Q
+        # )
+        if (MRI):
+            self.constraint = mri_constraint(current_Q1, target_Q) + mri_constraint(current_Q2, target_Q)
+        else:
+            self.constraint = irm_constraint(current_Q1, target_Q) + irm_constraint(current_Q2, target_Q)
+
+        
         logger.log("train_critic/loss", critic_loss, step)
 
         # add L2 penalty on latent representation
@@ -830,10 +839,10 @@ class IRMAgent(Agent):
             self.actor_optimizer.zero_grad()
             self.log_alpha_optimizer.zero_grad()
         
-        total_critic_loss.backward()
+        total_critic_loss.backward(retain_graph=True)
         if step % self.actor_update_frequency == 0:
-            torch.stack(total_actor_loss).mean().backward()
-            torch.stack(total_alpha_loss).mean().backward()
+            torch.stack(total_actor_loss).mean().backward(retain_graph=True)
+            torch.stack(total_alpha_loss).mean().backward(retain_graph=True)
 
         self.critic_optimizer.step()
         if step % self.actor_update_frequency == 0:
