@@ -751,6 +751,7 @@ class IRMAgent(Agent):
         total_actor_loss, total_alpha_loss, total_critic_loss = [], [], []
         target_vs = []
         irm_penalties = []
+        constraints = []
         for env_id in range(self.num_envs):
             (
                 obs,
@@ -774,15 +775,28 @@ class IRMAgent(Agent):
                 total_actor_loss.append(actor_loss)
                 total_alpha_loss.append(alpha_loss)
 
-            irm_penalties.append(self.irm_penalty)
-        l1 = irm_penalties[0]
-        l2 = irm_penalties[1]
-        train_penalty = (l1-l2).abs()*(0.7)
-        print(train_penalty)
+            #irm_penalties.append(self.irm_penalty)
+            constraints.append(self.constraint)
+
 
 
         # Optimize the critic
         #train_penalty = torch.stack(irm_penalties).mean()
+    
+        if(MRI):
+            diff = get_ortho_diff(self.num_envs)
+            penalty = constraints
+            penalty = torch.tensor(penalty)
+            penalty = diff.to(penalty.device,dtype = penalty.dtype) @ penalty
+
+        else :
+            penalty = constraints
+            penalty = torch.tensor(penalty)
+
+        penalty = penalty.abs().pow(2).mean()
+        scale = torch.tensor(1.0).requires_grad_()
+        penalty = penalty * scale
+        train_penalty = penalty
         penalty_weight = (
             self.penalty_weight if step >= self.penalty_anneal_iters else 1.0
         )
@@ -793,22 +807,22 @@ class IRMAgent(Agent):
             # Rescale the entire loss to keep gradients in a reasonable range
             total_critic_loss /= penalty_weight
 
-        self.critic_optimizer.zero_grad()
-        total_critic_loss.backward()
-        self.critic_optimizer.step()
-        self.critic.log(logger, step)
+        # self.critic_optimizer.zero_grad()
+        # total_critic_loss.backward()
+        # self.critic_optimizer.step()
+        # self.critic.log(logger, step)
 
-        if step % self.actor_update_frequency == 0:
-            # optimize the actor
-            self.actor_optimizer.zero_grad()
-            torch.stack(total_actor_loss).mean().backward()
-            self.actor_optimizer.step()
+        # if step % self.actor_update_frequency == 0:
+        #     # optimize the actor
+        #     self.actor_optimizer.zero_grad()
+        #     torch.stack(total_actor_loss).mean().backward()
+        #     self.actor_optimizer.step()
 
-            self.actor.log(logger, step)
+        #     self.actor.log(logger, step)
 
-            self.log_alpha_optimizer.zero_grad()
-            torch.stack(total_alpha_loss).mean().backward()
-            self.log_alpha_optimizer.step()
+        #     self.log_alpha_optimizer.zero_grad()
+        #     torch.stack(total_alpha_loss).mean().backward()
+        #     self.log_alpha_optimizer.step()
 
         # optimize together
         self.critic_optimizer.zero_grad()
@@ -827,5 +841,6 @@ class IRMAgent(Agent):
             self.log_alpha_optimizer.step()
 
         self.critic.log(logger, step)
+        self.actor.log(logger, step)
         if step % self.critic_target_update_frequency == 0:
             utils.soft_update_params(self.critic, self.critic_target, self.critic_tau)
