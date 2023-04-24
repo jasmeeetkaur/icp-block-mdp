@@ -26,6 +26,13 @@ def make_dynamics_model(feature_dim, hidden_dim, action_shape):
     )
     return model
 
+MRI = True
+def get_ortho_diff(n_env):
+    ones = torch.ones(n_env,1) 
+    a,_ = torch.linalg.qr(ones, mode='complete')
+    # U_mean = a[0:1]  # ones.T /math.sqrt(n_env)
+    U_diff = a[1:]
+    return U_diff  
 
 def irm_penalty(logits, labels):
     scale = torch.tensor(1.0).requires_grad_()
@@ -39,6 +46,15 @@ def mri_penalty(logits, labels):
     grad = autograd.grad(labels, [scale], create_graph=True)[0]
     return torch.sum(grad ** 2)
 
+def irm_constrain(logits, labels):
+    oo = (logits * logits).mean()
+    oy = (logits * labels).mean()
+    return (oo-oy)
+
+def mri_constrain(logits, labels):
+    oo = (logits * logits).mean()
+    oy = (logits * labels).mean()
+    return (oy)
 
 class SACAgent(Agent):
     """SAC algorithm."""
@@ -67,7 +83,7 @@ class SACAgent(Agent):
         batch_size,
     ):
         super().__init__()
-
+        print("SAC")
         self.action_range = action_range
         self.device = torch.device(device)
         self.discount = discount
@@ -171,19 +187,38 @@ class SACAgent(Agent):
         logger.log("train_actor/target_entropy", self.target_entropy, step)
         logger.log("train_actor/entropy", -log_prob.mean(), step)
 
-        # optimize the actor
+        # # optimize the actor
+        # self.actor_optimizer.zero_grad()
+        # actor_loss.backward()
+        # self.actor_optimizer.step()
+
+        # self.actor.log(logger, step)
+
+        # self.log_alpha_optimizer.zero_grad()
+        # alpha_loss = (self.alpha * (-log_prob - self.target_entropy).detach()).mean()
+        # logger.log("train_alpha/loss", alpha_loss, step)
+        # logger.log("train_alpha/value", self.alpha, step)
+        # alpha_loss.backward()
+        # self.log_alpha_optimizer.step()
+
+        #one at a time 
         self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        self.actor_optimizer.step()
-
-        self.actor.log(logger, step)
-
         self.log_alpha_optimizer.zero_grad()
+
+        actor_loss.backward()
+
         alpha_loss = (self.alpha * (-log_prob - self.target_entropy).detach()).mean()
         logger.log("train_alpha/loss", alpha_loss, step)
         logger.log("train_alpha/value", self.alpha, step)
         alpha_loss.backward()
+
+        self.actor_optimizer.step()
         self.log_alpha_optimizer.step()
+
+        self.actor.log(logger, step)
+
+
+
 
     def update(self, replay_buffer, logger, step):
         obs, action, reward, next_obs, not_done, not_done_no_max = replay_buffer.sample(
@@ -236,7 +271,7 @@ class CausalAgent(Agent):
         batch_size,
     ):
         super().__init__()
-
+        print("Causal")
         self.action_range = action_range
         self.device = torch.device(device)
         self.discount = discount
@@ -509,28 +544,49 @@ class CausalAgent(Agent):
 
             self.update_decoder(obs, action, reward, next_obs, logger, step, env_id)
 
-        # Optimize the critic
-        self.critic_optimizer.zero_grad()
-        torch.stack(total_critic_loss).mean().backward()
-        self.critic_optimizer.step()
-        self.critic.log(logger, step)
+        # # Optimize the critic
+        # self.critic_optimizer.zero_grad()
+        # torch.stack(total_critic_loss).mean().backward()
+        # self.critic_optimizer.step()
+        # self.critic.log(logger, step)
 
         # Optimize classifier
         self.update_classifier(
             torch.cat(obses, dim=0), torch.cat(env_ids, dim=0).squeeze()
         )
 
+        # if step % self.actor_update_frequency == 0:
+        #     # optimize the actor
+        #     self.actor_optimizer.zero_grad()
+        #     torch.stack(total_actor_loss).mean().backward()
+        #     self.actor_optimizer.step()
+
+        #     self.actor.log(logger, step)
+
+        #     self.log_alpha_optimizer.zero_grad()
+        #     torch.stack(total_alpha_loss).mean().backward()
+        #     self.log_alpha_optimizer.step()
+
+        # Optimize together
+        self.critic_optimizer.zero_grad()
         if step % self.actor_update_frequency == 0:
-            # optimize the actor
             self.actor_optimizer.zero_grad()
-            torch.stack(total_actor_loss).mean().backward()
-            self.actor_optimizer.step()
-
-            self.actor.log(logger, step)
-
             self.log_alpha_optimizer.zero_grad()
+
+        torch.stack(total_critic_loss).mean().backward()
+        if step % self.actor_update_frequency == 0:
+            torch.stack(total_actor_loss).mean().backward()
             torch.stack(total_alpha_loss).mean().backward()
-            self.log_alpha_optimizer.step()
+
+        self.critic_optimizer.step()
+        if step % self.actor_update_frequency == 0:
+             self.actor_optimizer.step()
+             self.log_alpha_optimizer.step()
+        
+        self.actor.log(logger, step)
+        self.critic.log(logger, step)
+        
+        
 
         if step % self.critic_target_update_frequency == 0:
             utils.soft_update_params(self.critic, self.critic_target, self.critic_tau)
@@ -754,5 +810,22 @@ class IRMAgent(Agent):
             torch.stack(total_alpha_loss).mean().backward()
             self.log_alpha_optimizer.step()
 
+        # optimize together
+        self.critic_optimizer.zero_grad()
+        if step % self.actor_update_frequency == 0:
+            self.actor_optimizer.zero_grad()
+            self.log_alpha_optimizer.zero_grad()
+        
+        total_critic_loss.backward()
+        if step % self.actor_update_frequency == 0:
+            torch.stack(total_actor_loss).mean().backward()
+            torch.stack(total_alpha_loss).mean().backward()
+
+        self.critic_optimizer.step()
+        if step % self.actor_update_frequency == 0:
+            self.actor_optimizer.step()
+            self.log_alpha_optimizer.step()
+
+        self.critic.log(logger, step)
         if step % self.critic_target_update_frequency == 0:
             utils.soft_update_params(self.critic, self.critic_target, self.critic_tau)
