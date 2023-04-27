@@ -16,6 +16,7 @@ from decoder import make_decoder
 from encoder import make_encoder
 
 
+
 def make_dynamics_model(feature_dim, hidden_dim, action_shape):
     model = nn.Sequential(
         nn.Linear(feature_dim + action_shape, hidden_dim),
@@ -41,19 +42,24 @@ def irm_penalty(logits, labels):
 
 def mri_penalty(logits, labels):
     scale = torch.tensor(1.0).requires_grad_()
-    labels = (labels.abs().pow(2).mean())*scale
-    grad = autograd.grad(labels, [scale], create_graph=True)[0]
-    return torch.sum(grad ** 2)
+    loss = F.mse_loss(labels * scale, logits)
+    loss = loss * 0.707
+    grad = autograd.grad(loss, [scale], create_graph=True)[0]
+    return torch.sum(grad**2)
 
 def irm_constraint(logits, labels):
+    scale = torch.tensor(1.0).requires_grad_()
     oo = (logits * logits).mean()
     oy = (logits * labels).mean()
-    return (oo-oy)
+    d = oo - oy
+    return (d**2)
 
 def mri_constraint(logits, labels):
+    scale = torch.tensor(1.0).requires_grad_()
     oo = (logits * logits).mean()
     oy = (logits * labels).mean()
-    return (oy)
+    d = oy
+    return (d**2)
 
 class SACAgent(Agent):
     """SAC algorithm."""
@@ -371,7 +377,7 @@ class CausalAgent(Agent):
             list(self.decoder.parameters())
             + list(self.model.parameters())
             + list(self.reward_model.parameters())
-            #+ task_specific_parameters
+            + task_specific_parameters
             + list(self.encoder.parameters()),
             lr=decoder_lr,
             weight_decay=decoder_weight_lambda,
@@ -493,7 +499,7 @@ class CausalAgent(Agent):
             + self.decoder_latent_lambda * L1_reg
             - c_ent * entropy
             + self.kld * KLD
-        ).backward(retain_graph=True)
+        ).backward()
 
         self.encoder_optimizer.step()
         self.decoder_optimizer.step()
@@ -506,7 +512,7 @@ class CausalAgent(Agent):
         classifier_loss = F.cross_entropy(pred_labels, env_id)
 
         self.classifier_optimizer.zero_grad()
-        classifier_loss.backward(retain_graph=True)
+        classifier_loss.backward()
         self.classifier_optimizer.step()
 
     def update(self, replay_buffer, logger, step):
@@ -530,7 +536,6 @@ class CausalAgent(Agent):
             env_ids.append(torch.ones_like(reward).long() * env_id)
 
             logger.log("train/batch_reward", reward.mean(), step)
-
             critic_loss = self.update_critic(
                 obs, action, reward, next_obs, not_done_no_max, logger, step
             )
@@ -545,14 +550,15 @@ class CausalAgent(Agent):
 
         # # Optimize the critic
         # self.critic_optimizer.zero_grad()
-        # torch.stack(total_critic_loss).mean().backward()
+        # total_critic_loss =  torch.stack(total_critic_loss).mean()
+        # total_critic_loss.backward()
         # self.critic_optimizer.step()
         # self.critic.log(logger, step)
 
-        # Optimize classifier
-        self.update_classifier(
-            torch.cat(obses, dim=0), torch.cat(env_ids, dim=0).squeeze()
-        )
+        # # Optimize classifier
+        # self.update_classifier(
+        #     torch.cat(obses, dim=0), torch.cat(env_ids, dim=0).squeeze()
+        # )
 
         # if step % self.actor_update_frequency == 0:
         #     # optimize the actor
@@ -572,10 +578,11 @@ class CausalAgent(Agent):
             self.actor_optimizer.zero_grad()
             self.log_alpha_optimizer.zero_grad()
 
-        torch.stack(total_critic_loss).mean().backward(retain_graph=True)
+        total_critic_loss1 =  torch.stack(total_critic_loss).mean().clone()
+        total_critic_loss1.backward()
         if step % self.actor_update_frequency == 0:
-            torch.stack(total_actor_loss).mean().backward(retain_graph=True)
-            torch.stack(total_alpha_loss).mean().backward(retain_graph=True)
+            torch.stack(total_actor_loss).mean().backward()
+            torch.stack(total_alpha_loss).mean().backward()
 
         self.critic_optimizer.step()
         if step % self.actor_update_frequency == 0:
@@ -708,13 +715,13 @@ class IRMAgent(Agent):
             current_Q2, target_Q
         )
 
-        # self.irm_penalty = irm_penalty(current_Q1, target_Q) + irm_penalty(
-        #     current_Q2, target_Q
-        # )
+        self.irm_penalty = irm_penalty(current_Q1, target_Q) + irm_penalty(
+            current_Q2, target_Q
+        )
 
-        # self.irm_penalty = mri_penalty(current_Q1, target_Q) + mri_penalty(
-        #     current_Q2, target_Q
-        # )
+        self.mri_penalty = mri_penalty(current_Q1, target_Q) + mri_penalty(
+            current_Q2, target_Q
+        )
         if (MRI):
             self.constraint = mri_constraint(current_Q1, target_Q) + mri_constraint(current_Q2, target_Q)
         else:
@@ -761,6 +768,7 @@ class IRMAgent(Agent):
         target_vs = []
         irm_penalties = []
         constraints = []
+        mri_penalties = []
         for env_id in range(self.num_envs):
             (
                 obs,
@@ -784,38 +792,46 @@ class IRMAgent(Agent):
                 total_actor_loss.append(actor_loss)
                 total_alpha_loss.append(alpha_loss)
 
-            #irm_penalties.append(self.irm_penalty)
+            irm_penalties.append(self.irm_penalty)
+            mri_penalties.append(self.mri_penalty)
             constraints.append(self.constraint)
 
 
 
         # Optimize the critic
-        #train_penalty = torch.stack(irm_penalties).mean()
-    
+        # train_penalty = torch.stack(irm_penalties).mean()
         if(MRI):
-            diff = get_ortho_diff(self.num_envs)
-            penalty = constraints
-            penalty = torch.tensor(penalty)
-            penalty = diff.to(penalty.device,dtype = penalty.dtype) @ penalty
+            mri_penalties[0] = -1 * mri_penalties[0]
+            scale = torch.tensor(1.0).requires_grad_()
+            #diff =  get_ortho_diff(self.num_envs)
+            #diff = torch.tensor(diff).requires_grad_()
+            penalty = mri_penalties
+            penalty = torch.stack(penalty).mean()
+            #penalty = torch.tensor(mri_penalties)
+            #penalty = (diff.to(penalty.device,dtype = penalty.dtype) @ penalty).type(penalty.dtype)
+            #penalty = (torch.matmul(diff,penalty)*(0.7071)).abs().pow(2).mean()
+
 
         else :
-            penalty = constraints
-            penalty = torch.tensor(penalty)
+            penalty = irm_penalties
+            penalty = torch.stack(penalty).mean()
+    
+        # print(loss)
+        # scale = torch.tensor(1.0).requires_grad_()
+        # # grad = autograd.grad(loss, [scale], create_graph=True)[0]
+        # # loss = Variable(loss, requires_grad = True)
 
-        penalty = penalty.abs().pow(2).mean()
-        scale = torch.tensor(1.0).requires_grad_()
-        penalty = penalty * scale
         train_penalty = penalty
         penalty_weight = (
             self.penalty_weight if step >= self.penalty_anneal_iters else 1.0
         )
-        logger.log("train_encoder/penalty", train_penalty, step)
+        # logger.log("train_encoder/penalty", train_penalty, step)
+
         total_critic_loss = torch.stack(total_critic_loss).mean()
-        total_critic_loss += penalty_weight * train_penalty
+        total_critic_loss =  total_critic_loss + penalty_weight * train_penalty
         if penalty_weight > 1.0:
             # Rescale the entire loss to keep gradients in a reasonable range
-            total_critic_loss /= penalty_weight
-
+            total_critic_loss = total_critic_loss / penalty_weight
         # self.critic_optimizer.zero_grad()
         # total_critic_loss.backward()
         # self.critic_optimizer.step()

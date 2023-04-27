@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 # Copyright (c) Facebook, Inc. and its affiliates.
 
 import copy
@@ -20,7 +18,6 @@ import utils
 from logger import Logger
 from replay_buffer import MultiEnvReplayBuffer
 from video import VideoRecorder
-
 
 class Workspace(object):
     def __init__(self, cfg):
@@ -139,7 +136,6 @@ class Workspace(object):
                     episode_step[e_idx] = 0
                     episode[e_idx] += 1
 
-                    print("train/episode", episode[e_idx], self.step[e_idx])
                     self.logger.log("train/episode", episode[e_idx], self.step[e_idx])
 
                 # sample action for data collection
@@ -196,4 +192,5 @@ def main(cfg):
 
 
 if __name__ == "__main__":
+    print("STarting")
     main()

@@ -26,9 +26,11 @@ class DoubleQCritic(nn.Module):
 
         if self.encoder is not None:
             if detach:
-                obs = self.encoder(obs).detach()
+                obs_tmp = obs.clone().detach()
+                obs = self.encoder(obs_tmp).detach()
             else:
-                obs = self.encoder(obs)
+                obs_tmp = obs.clone().detach()
+                obs = self.encoder(obs_tmp)
         obs_action = torch.cat([obs, action], dim=-1)
         q1 = self.Q1(obs_action)
         q2 = self.Q2(obs_action)

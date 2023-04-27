@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def tie_weights(src, trg):
@@ -140,7 +141,8 @@ class MLPEncoder(nn.Module):
 
     def forward(self, obs, detach=False):
         for i in range(len(self.model)):
-            obs = torch.relu(self.model[i](obs))
+            obs_tmp = obs.clone().detach()
+            obs = F.relu(self.model[i](obs_tmp),inplace=False)
         if detach:
             return obs.detach()
         else:
