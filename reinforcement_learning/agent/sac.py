@@ -43,7 +43,6 @@ def irm_penalty(logits, labels):
 def mri_penalty(logits, labels):
     scale = torch.tensor(1.0).requires_grad_()
     loss = F.mse_loss(labels * scale, logits)
-    loss = loss * 0.707
     grad = autograd.grad(loss, [scale], create_graph=True)[0]
     return torch.sum(grad**2)
 
@@ -793,7 +792,7 @@ class IRMAgent(Agent):
                 total_alpha_loss.append(alpha_loss)
 
             irm_penalties.append(self.irm_penalty)
-            mri_penalties.append(self.mri_penalty)
+            mri_penalties.append(self.mri_penalty*0.707)
             constraints.append(self.constraint)
 
 

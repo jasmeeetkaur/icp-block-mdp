@@ -1,6 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-
-#!/bin/bash
+#!/lusr/bin/bash
 
 DOMAIN=cartpole
 TASK=swingup

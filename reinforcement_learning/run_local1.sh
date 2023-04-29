@@ -10,5 +10,5 @@ SAVEDIR=./save
 CUDA_VISIBLE_DEVICES=1 python train.py \
     env=${DOMAIN}_${TASK} \
     experiment=${DOMAIN}_${TASK} \
-    agent=sac\
+    agent=irm\
     seed=1
